@@ -1,0 +1,36 @@
+{
+  "title": "signal_rooms",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "integer"
+    },
+    "code": {
+      "type": "string",
+      "unique": true
+    },
+    "host_peer_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "read_only": true
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "read_only": true
+    }
+  },
+  "required": [
+    "id",
+    "code",
+    "host_peer_id",
+    "status"
+  ],
+  "create_only": false
+}

@@ -1,0 +1,48 @@
+{
+  "title": "signal_signals",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "integer"
+    },
+    "room_id": {
+      "type": "integer"
+    },
+    "sender_peer_id": {
+      "type": "string"
+    },
+    "target_peer_id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "string",
+      "format": "text"
+    },
+    "created_at_ms": {
+      "type": "integer"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "read_only": true
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "read_only": true
+    }
+  },
+  "required": [
+    "id",
+    "room_id",
+    "sender_peer_id",
+    "target_peer_id",
+    "kind",
+    "payload",
+    "created_at_ms"
+  ],
+  "create_only": false
+}

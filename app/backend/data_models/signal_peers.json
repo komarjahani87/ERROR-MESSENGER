@@ -1,0 +1,47 @@
+{
+  "title": "signal_peers",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "integer"
+    },
+    "room_id": {
+      "type": "integer"
+    },
+    "peer_id": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string"
+    },
+    "token_hash": {
+      "type": "string"
+    },
+    "last_seen_ms": {
+      "type": "integer"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "read_only": true
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "read_only": true
+    }
+  },
+  "required": [
+    "id",
+    "room_id",
+    "peer_id",
+    "display_name",
+    "role",
+    "token_hash",
+    "last_seen_ms"
+  ],
+  "create_only": false
+}
