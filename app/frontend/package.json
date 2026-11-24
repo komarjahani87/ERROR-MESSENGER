@@ -1,12 +1,18 @@
 {
   "name": "shadcnui",
-  "type": "module",
+  "version": "1.0.0",
+  "description": "Error Messenger desktop app",
+  "author": "Your Name <you@example.com>",
+  "private": true,
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint --quiet ./src",
     "preview": "vite preview",
-    "postinstall": "echo 'Dependencies installed successfully'"
+    "postinstall": "echo 'Dependencies installed successfully'",
+    "electron:dev": "electron .",
+    "build:desktop": "npm run build -- --base=./ && electron-builder --win nsis"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
@@ -77,6 +83,8 @@
     "@typescript-eslint/parser": "^8.42.0",
     "@vitejs/plugin-react-swc": "^3.5.0",
     "autoprefixer": "^10.4.20",
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0",
     "eslint": "^9.9.0",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.9",
@@ -92,5 +100,37 @@
     "vite": "^5.4.1",
     "vite-plugin-sitemap": "^0.8.2",
     "vite-prerender-plugin": "^0.5.13"
+  },
+  "build": {
+    "appId": "com.errormessenger.desktop",
+    "productName": "ERROR MESSENGER",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/dist/error-messenger-backend.exe",
+        "to": "backend/error-messenger-backend.exe"
+      }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "ERROR MESSENGER",
+      "createStartMenuShortcut": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    }
   }
 }

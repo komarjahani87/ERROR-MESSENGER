@@ -1,7 +1,5 @@
-import importlib
 import logging
 import os
-import pkgutil
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -11,49 +9,48 @@ from core.environment import get_env_bool
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRouter
 from utils.logging_utils import cleanup_old_log_files
 
 try:
     from core.telemetry import RequestSummaryMiddleware
-except Exception:  # Telemetry must never prevent the generated app from starting.
+except Exception:  # Telemetry must never prevent the app from starting.
     RequestSummaryMiddleware = None
+
 
 def setup_logging():
     """Configure the logging system."""
     if os.environ.get("IS_LAMBDA") == "true":
         return
 
-    # Create the logs directory
-    log_dir = "logs"
+    # Store logs in a writable user directory.
+    if os.name == "nt":
+        base_dir = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        log_dir = os.path.join(base_dir, "ERROR MESSENGER", "logs")
+    else:
+        log_dir = os.path.join(os.path.expanduser("~"), ".error-messenger", "logs")
+
     os.makedirs(log_dir, exist_ok=True)
 
-    # Aggregate local app logs by calendar day.
     log_date = datetime.now().strftime("%Y%m%d")
     log_file = os.path.join(log_dir, f"app_{log_date}.log")
 
-    # Configure log format
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
-    # Configure the root logger
     logging.basicConfig(
         level=logging.DEBUG,
         format=log_format,
         handlers=[
-            # File handler
             logging.FileHandler(log_file, mode="a", encoding="utf-8"),
-            # Console handler
             logging.StreamHandler(),
         ],
     )
+
     cleanup_old_log_files(log_dir, current_log_file=log_file)
 
-    # Set log levels for specific modules
     logging.getLogger("uvicorn").setLevel(logging.DEBUG)
     logging.getLogger("fastapi").setLevel(logging.DEBUG)
     logging.getLogger("watchfiles").setLevel(logging.WARNING)
 
-    # Log configuration details
     logger = logging.getLogger(__name__)
     logger.info("=== Logging system initialized ===")
     logger.info(f"Log file: {log_file}")
@@ -65,6 +62,19 @@ def setup_logging():
 async def lifespan(app: FastAPI):
     logger = logging.getLogger(__name__)
     logger.info("=== Application startup initiated ===")
+
+    # Create all tables on startup (does not touch existing tables).
+    # Explicit imports so models register on Base.metadata (and so PyInstaller bundles them).
+    from core.database import Base, db_manager
+    import models.auth  # noqa: F401
+    import models.signal_peers  # noqa: F401
+    import models.signal_rooms  # noqa: F401
+    import models.signal_signals  # noqa: F401
+
+    engine = await db_manager.get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables ensured: %s", sorted(Base.metadata.tables))
 
     if not get_env_bool("MGX_IGNORE_MODULE_INIT", default=True):
         # MODULE_IMPORTS_START
@@ -78,11 +88,14 @@ async def lifespan(app: FastAPI):
 
     logger.info("=== Application startup completed successfully ===")
     yield
+
     if not get_env_bool("MGX_IGNORE_MODULE_INIT", default=True):
         # MODULE_SHUTDOWN_START
         await close_database()
         # MODULE_SHUTDOWN_END
         pass
+
+    await db_manager.close_db()
 
 
 app = FastAPI(
@@ -109,58 +122,36 @@ if RequestSummaryMiddleware is not None:
     app.add_middleware(RequestSummaryMiddleware)
 
 
-# Auto-discover and include all routers from the local `routers` package
-def include_routers_from_package(app: FastAPI, package_name: str = "routers") -> None:
-    """Discover and include all APIRouter objects from a package.
-
-    This scans the given package (and subpackages) for module-level variables that
-    are instances of FastAPI's APIRouter. It supports "router", "admin_router" names.
-    """
-
-    logger = logging.getLogger(__name__)
-
-    try:
-        pkg = importlib.import_module(package_name)
-    except Exception as exc:  # pragma: no cover - defensive logging
-        logger.debug("Routers package '%s' not loaded: %s", package_name, exc)
-        return
-
-    discovered: int = 0
-    for _finder, module_name, is_pkg in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + "."):
-        # Only import leaf modules; subpackages will be walked automatically
-        if is_pkg:
-            continue
-        try:
-            module = importlib.import_module(module_name)
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("Failed to import module '%s': %s", module_name, exc)
-            continue
-
-        # Check for router variable names: router and admin_router
-        for attr_name in ("router", "admin_router"):
-            if not hasattr(module, attr_name):
-                continue
-
-            attr = getattr(module, attr_name)
-
-            if isinstance(attr, APIRouter):
-                app.include_router(attr)
-                discovered += 1
-                logger.info("Included router: %s.%s", module_name, attr_name)
-            elif isinstance(attr, (list, tuple)):
-                for idx, item in enumerate(attr):
-                    if isinstance(item, APIRouter):
-                        app.include_router(item)
-                        discovered += 1
-                        logger.info("Included router from list: %s.%s[%d]", module_name, attr_name, idx)
-
-    if discovered == 0:
-        logger.debug("No routers discovered in package '%s'", package_name)
-
-
-# Setup logging before router discovery
+# Setup logging before router registration
 setup_logging()
-include_routers_from_package(app, "routers")
+
+# Explicit router imports for PyInstaller compatibility
+from routers.aihub import router as aihub_router
+from routers.auth import router as auth_router
+from routers.health import router as health_router
+from routers.settings import router as settings_router
+from routers.signaling import router as signaling_router
+from routers.signal_peers import router as signal_peers_router
+from routers.signal_rooms import router as signal_rooms_router
+from routers.signal_signals import router as signal_signals_router
+from routers.storage import router as storage_router
+from routers.user import router as user_router
+
+
+# Register all application routers
+for application_router in (
+    aihub_router,
+    auth_router,
+    health_router,
+    settings_router,
+    signaling_router,
+    signal_peers_router,
+    signal_rooms_router,
+    signal_signals_router,
+    storage_router,
+    user_router,
+):
+    app.include_router(application_router)
 
 
 # Add exception handler for all exceptions except HTTPException
@@ -182,15 +173,12 @@ async def general_exception_handler(request: Request, exc: Exception):
     # Log full error details regardless of environment
     logger.error(f"Exception: {error_type}: {error_message}\n{traceback.format_exc()}")
 
-    # Determine if we're in dev environment
     is_dev = os.getenv("ENVIRONMENT", "prod").lower() == "dev"
 
     if is_dev:
-        # Dev environment: return full stack trace and exception details
         error_detail = f"{error_type}: {error_message}\n{traceback.format_exc()}"
         return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": error_detail})
     else:
-        # Prod environment: return only generic error message
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": "Internal Server Error"}
         )
@@ -209,14 +197,9 @@ def health_check():
 def run_in_debug_mode(app: FastAPI):
     """Run the FastAPI app in debug mode with proper asyncio handling.
 
-    This function handles the special case of running in a debugger (PyCharm, VS Code, etc.)
-    where asyncio is patched, causing conflicts with uvicorn's asyncio_run.
-
-    It loads environment variables from ../.env and uses asyncio.run() directly
-    to avoid uvicorn's asyncio_run conflicts.
-
-    Args:
-        app: The FastAPI application instance
+    Handles running under a debugger (PyCharm, VS Code, etc.) where asyncio is
+    patched, causing conflicts with uvicorn's asyncio_run. Loads ../.env and
+    uses asyncio.run() directly.
     """
     import asyncio
     from pathlib import Path
@@ -224,18 +207,15 @@ def run_in_debug_mode(app: FastAPI):
     import uvicorn
     from dotenv import load_dotenv
 
-    # Load environment variables from ../.env in debug mode
-    # If `LOCAL_DEBUG=true` is set, then MetaGPT's `ProjectBuilder.build()` will generate the `.env` file
     env_path = Path(__file__).parent.parent / ".env"
     if env_path.exists():
         load_dotenv(env_path, override=True)
         logger = logging.getLogger(__name__)
         logger.info(f"Loaded environment variables from {env_path}")
 
-    # In debug mode, use asyncio.run() directly to avoid uvicorn's asyncio_run conflicts
     config = uvicorn.Config(
         app,
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=int(settings.port),
         log_level="info",
     )
@@ -249,16 +229,13 @@ if __name__ == "__main__":
     import uvicorn
 
     # Detect if running in debugger (PyCharm, VS Code, etc.)
-    # Debuggers patch asyncio which conflicts with uvicorn's asyncio_run
     is_debugging = "pydevd" in sys.modules or (hasattr(sys, "gettrace") and sys.gettrace() is not None)
 
     if is_debugging:
         run_in_debug_mode(app)
     else:
-        # Enable reload in normal mode
         uvicorn.run(
             app,
-            host="0.0.0.0",
+            host="127.0.0.1",
             port=int(settings.port),
-            reload_excludes=["**/*.py"],
         )

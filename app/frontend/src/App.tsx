@@ -1,7 +1,7 @@
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Routes, Route } from 'react-router-dom';
 import BlogRoutes from './blog-routes';
 import Index from './pages/Index';
 import AuthCallback from './pages/AuthCallback';
@@ -34,9 +34,9 @@ const App = () => (
     {/* MODULE_PROVIDERS_END */}
     <TooltipProvider>
       <Toaster />
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
+      <HashRouter>
+  <AppRoutes />
+</HashRouter>
     </TooltipProvider>
     </AuthProvider>
     {/* MODULE_PROVIDERS_CLOSE */}
