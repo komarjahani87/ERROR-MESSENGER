@@ -1,6 +1,6 @@
 {
   "name": "shadcnui",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Error Messenger desktop app",
   "author": "Your Name <you@example.com>",
   "private": true,
@@ -124,6 +124,7 @@
     },
     "nsis": {
       "oneClick": false,
+      "artifactName": "${productName} Setup ${version}.exe",
       "createDesktopShortcut": true,
       "shortcutName": "ERROR MESSENGER",
       "createStartMenuShortcut": true,

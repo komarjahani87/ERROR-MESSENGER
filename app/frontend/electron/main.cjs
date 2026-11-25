@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -43,11 +43,27 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // No native menu bar. autoHideMenuBar keeps Alt from restoring one on Windows.
+  win.setMenu(null);
+
+  // Keep the debugging shortcuts that the removed default menu used to provide.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const isDevTools =
+      input.key === 'F12' ||
+      (input.control && !input.alt && input.shift && input.key.toLowerCase() === 'i');
+    if (isDevTools) {
+      win.webContents.toggleDevTools();
+      event.preventDefault();
+    }
   });
 
   // لینک‌های خارجی توی مرورگر پیش‌فرض باز بشن
@@ -64,6 +80,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   startBackend();
   createWindow();
 

@@ -79,6 +79,7 @@ export default function Index() {
                 linkState={messenger.linkState}
                 statusDetail={messenger.statusDetail}
                 onSend={messenger.sendMessage}
+                onSendVoice={messenger.sendVoice}
                 onRetry={messenger.retryLink}
                 onOpenSettings={() => setSettingsOpen(true)}
                 onLeave={() => void messenger.leaveRoom()}

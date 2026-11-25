@@ -20,6 +20,15 @@ export type LinkState = 'idle' | 'connecting' | 'connected' | 'failed' | 'closed
 
 export type DeliveryStatus = 'sending' | 'sent' | 'delivered' | 'failed';
 
+export interface VoicePayload {
+  mimeType: string;
+  durationMs: number;
+  /** Base64 audio while in flight; never persisted. */
+  data?: string;
+  /** Runtime-only object URL used for playback. */
+  audioUrl?: string;
+}
+
 export interface ChatMessage {
   id: string;
   author: string;
@@ -27,6 +36,19 @@ export interface ChatMessage {
   text: string;
   at: number;
   status: DeliveryStatus;
+  voice?: VoicePayload;
+}
+
+/** Drop transport-only fields before a message is written to storage. */
+export function stripVoiceTransport(message: ChatMessage): ChatMessage {
+  if (!message.voice) return message;
+  return {
+    ...message,
+    voice: {
+      mimeType: message.voice.mimeType,
+      durationMs: message.voice.durationMs,
+    },
+  };
 }
 
 export interface StoredSession {

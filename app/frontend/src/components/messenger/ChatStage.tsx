@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Lock, ShieldCheck, TriangleAlert, WifiOff } from 'lucide-react';
+import { ArrowUp, Lock, Mic, ShieldCheck, TriangleAlert, WifiOff } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { VoiceRecorder } from './VoiceRecorder';
 import { ConnectionDot, StatusBadge } from './StatusBadge';
 import { formatDay, initials } from '@/lib/messenger/format';
 import { MAX_TEXT_LENGTH } from '@/lib/messenger/link';
@@ -15,6 +16,7 @@ interface ChatStageProps {
   linkState: LinkState;
   statusDetail: string;
   onSend: (text: string) => boolean;
+  onSendVoice: (audio: Blob, mimeType: string, durationMs: number) => Promise<boolean> | boolean;
   onRetry: () => void;
   onOpenSettings: () => void;
   onLeave: () => void;
@@ -29,12 +31,14 @@ export function ChatStage({
   linkState,
   statusDetail,
   onSend,
+  onSendVoice,
   onRetry,
   onOpenSettings,
   onLeave,
   isHost,
 }: ChatStageProps) {
   const [draft, setDraft] = useState('');
+  const [recording, setRecording] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -213,6 +217,7 @@ export function ChatStage({
           </p>
         )}
 
+        {!recording ? (
         <div className="mx-auto flex max-w-[760px] items-end gap-2 rounded-xl border border-border/80 bg-card px-2.5 py-2 transition-colors focus-within:border-signal/60">
           <label htmlFor="message-input" className="sr-only">
             Message {peerName}
@@ -237,6 +242,16 @@ export function ChatStage({
           />
           <button
             type="button"
+            onClick={() => setRecording(true)}
+            disabled={!connected}
+            aria-label="Record a voice message"
+            title="Record a voice message"
+            className="mb-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground transition-colors hover:border-signal/60 hover:text-signal-strong disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Mic aria-hidden="true" className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
             onClick={submit}
             disabled={!connected || !draft.trim()}
             aria-label="Send message"
@@ -245,6 +260,15 @@ export function ChatStage({
             <ArrowUp aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
+        ) : (
+          <VoiceRecorder
+            onCancel={() => setRecording(false)}
+            onSend={(audio, mimeType, durationMs) => {
+              setRecording(false);
+              void onSendVoice(audio, mimeType, durationMs);
+            }}
+          />
+        )}
 
         <div className="mx-auto mt-2 flex max-w-[760px] items-center justify-between gap-3 text-[11px] text-muted-foreground">
           <p id="composer-hint" className="truncate">

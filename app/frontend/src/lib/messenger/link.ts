@@ -1,8 +1,11 @@
 import type { ChatMessage, LinkState, RoomPeer, SessionCredentials } from './types';
 import { signaling, type SyncPayload } from './signaling';
+import { MAX_VOICE_BYTES, VOICE_BUFFER_LIMIT, base64ToBytes, blobToBase64Chunks } from './voice';
 
 const POLL_MS = 2000;
 export const MAX_TEXT_LENGTH = 4000;
+/** Upper bound on chunks accepted for a single incoming voice note. */
+const MAX_VOICE_CHUNKS = Math.ceil(MAX_VOICE_BYTES / (16 * 1024));
 
 export type LinkEvent =
   | { type: 'state'; state: LinkState; detail?: string }
@@ -13,11 +16,24 @@ export type LinkEvent =
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string };
 
 interface WireMessage {
-  t: 'msg' | 'ack' | 'hello';
+  t: 'msg' | 'ack' | 'hello' | 'voice-start' | 'voice-chunk' | 'voice-end';
   id?: string;
   text?: string;
   at?: number;
   author?: string;
+  mime?: string;
+  dur?: number;
+  seq?: number;
+  data?: string;
+}
+
+interface IncomingVoice {
+  mimeType: string;
+  durationMs: number;
+  at: number;
+  author: string;
+  parts: Uint8Array[];
+  received: number;
 }
 
 interface WireCandidate {
@@ -56,6 +72,7 @@ export class PeerLink {
   private lastPeerListKey = '';
   private lastOfferAt = 0;
   private interruptedSince = 0;
+  private incomingVoices = new Map<string, IncomingVoice>();
 
   constructor(
     session: SessionCredentials,
@@ -107,28 +124,100 @@ export class PeerLink {
   send(text: string, author: string): ChatMessage | null {
     const clean = text.trim().slice(0, MAX_TEXT_LENGTH);
     if (!clean) return null;
+    const message = this.buildSelfMessage(author, clean, Date.now());
+    if (!this.sendJson({ t: 'msg', id: message.id, text: clean, at: message.at, author })) return null;
+    return message;
+  }
+
+  /**
+   * Stream a voice note to the peer in bounded chunks. Each chunk is sent as
+   * its own DataChannel message, so no single frame approaches the size guard.
+   */
+  async sendVoice(
+    audio: Blob,
+    mimeType: string,
+    durationMs: number,
+    author: string,
+  ): Promise<ChatMessage | null> {
+    if (!mimeType || audio.size === 0) return null;
+    if (audio.size > MAX_VOICE_BYTES) {
+      this.log('error', 'Voice note too large to send (12 MB limit).');
+      return null;
+    }
+    const channel = this.channel;
+    if (!channel || channel.readyState !== 'open') {
+      this.log('warn', 'Voice note not sent: the direct link is not open.');
+      return null;
+    }
+
+    const chunks = await blobToBase64Chunks(audio);
+    const message: ChatMessage = {
+      id: this.newId(),
+      author,
+      direction: 'self',
+      text: 'Voice message',
+      at: Date.now(),
+      status: 'sent',
+      voice: {
+        mimeType,
+        durationMs,
+        audioUrl: URL.createObjectURL(audio),
+      },
+    };
+
+    const okStart = this.sendJson({
+      t: 'voice-start',
+      id: message.id,
+      mime: mimeType,
+      dur: durationMs,
+      author,
+      at: message.at,
+    });
+    if (!okStart) return null;
+
+    for (let index = 0; index < chunks.length; index += 1) {
+      // Keep only a small window of data buffered in the channel at once.
+      while (channel.bufferedAmount > VOICE_BUFFER_LIMIT) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        if (this.channel !== channel || channel.readyState !== 'open') return null;
+      }
+      if (!this.sendJson({ t: 'voice-chunk', id: message.id, seq: index, data: chunks[index] })) {
+        return null;
+      }
+    }
+
+    if (!this.sendJson({ t: 'voice-end', id: message.id, seq: chunks.length })) return null;
+    return message;
+  }
+
+  private buildSelfMessage(author: string, text: string, at: number): ChatMessage {
+    return {
+      id: this.newId(),
+      author,
+      direction: 'self',
+      text,
+      at,
+      status: 'sent',
+    };
+  }
+
+  private newId(): string {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private sendJson(payload: WireMessage): boolean {
     const channel = this.channel;
     if (!channel || channel.readyState !== 'open') {
       this.log('warn', 'Message not sent: the direct link is not open.');
-      return null;
+      return false;
     }
-
-    const message: ChatMessage = {
-      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      author,
-      direction: 'self',
-      text: clean,
-      at: Date.now(),
-      status: 'sent',
-    };
-
     try {
-      channel.send(JSON.stringify({ t: 'msg', id: message.id, text: clean, at: message.at, author } satisfies WireMessage));
+      channel.send(JSON.stringify(payload));
     } catch (error) {
       this.log('error', `Send failed: ${(error as Error).message}`);
-      return null;
+      return false;
     }
-    return message;
+    return true;
   }
 
   retry(): void {
@@ -367,6 +456,62 @@ export class PeerLink {
       return;
     }
 
+    if (parsed.t === 'voice-start' && parsed.id) {
+      this.incomingVoices.set(parsed.id, {
+        mimeType: typeof parsed.mime === 'string' ? parsed.mime.slice(0, 128) : 'audio/webm',
+        durationMs: Number(parsed.dur) || 0,
+        at: Number(parsed.at) || Date.now(),
+        author: parsed.author || this.remoteName,
+        parts: [],
+        received: 0,
+      });
+      return;
+    }
+
+    if (parsed.t === 'voice-chunk' && parsed.id && typeof parsed.data === 'string') {
+      const incoming = this.incomingVoices.get(parsed.id);
+      if (!incoming) return;
+      if (incoming.parts.length >= MAX_VOICE_CHUNKS) {
+        this.incomingVoices.delete(parsed.id);
+        this.log('warn', 'Dropped an oversized incoming voice note.');
+        return;
+      }
+      incoming.parts.push(base64ToBytes(parsed.data));
+      incoming.received += parsed.data.length;
+      if (incoming.received > MAX_VOICE_BYTES) {
+        this.incomingVoices.delete(parsed.id);
+        this.log('warn', 'Dropped an oversized incoming voice note.');
+      }
+      return;
+    }
+
+    if (parsed.t === 'voice-end' && parsed.id) {
+      const incoming = this.incomingVoices.get(parsed.id);
+      this.incomingVoices.delete(parsed.id);
+      if (!incoming) return;
+      try {
+        const blob = new Blob(incoming.parts as BlobPart[], { type: incoming.mimeType });
+        const message: ChatMessage = {
+          id: parsed.id,
+          author: incoming.author,
+          direction: 'peer',
+          text: 'Voice message',
+          at: incoming.at,
+          status: 'delivered',
+          voice: {
+            mimeType: incoming.mimeType,
+            durationMs: incoming.durationMs,
+            audioUrl: URL.createObjectURL(blob),
+          },
+        };
+        this.emit({ type: 'message', message });
+        this.sendJson({ t: 'ack', id: parsed.id });
+      } catch {
+        this.log('warn', 'Could not rebuild an incoming voice note.');
+      }
+      return;
+    }
+
     if (parsed.t === 'ack' && parsed.id) {
       this.emit({ type: 'delivered', id: parsed.id });
       return;
@@ -493,5 +638,6 @@ export class PeerLink {
     this.remotePeerId = null;
     this.pendingCandidates = [];
     this.interruptedSince = 0;
+    this.incomingVoices.clear();
   }
 }

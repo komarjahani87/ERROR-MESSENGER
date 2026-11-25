@@ -11,6 +11,7 @@ import type {
   SessionCredentials,
   StoredSession,
 } from '@/lib/messenger/types';
+import { stripVoiceTransport } from '@/lib/messenger/types';
 
 const LOG_LIMIT = 60;
 
@@ -101,7 +102,7 @@ export function useMessenger() {
       peerId: peer?.peerId ?? '',
       startedAt: startedAtRef.current || Date.now(),
       endedAt: null,
-      messages: messages.slice(-200),
+      messages: messages.slice(-200).map(stripVoiceTransport),
     };
     const timer = setTimeout(() => setHistory(sessionStore.upsert(record)), 350);
     return () => clearTimeout(timer);
@@ -125,7 +126,9 @@ export function useMessenger() {
           if (prefsRef.current.sound) playChime();
           if (prefsRef.current.notifications && 'Notification' in window && Notification.permission === 'granted') {
             try {
-              new Notification(event.message.author, { body: event.message.text.slice(0, 120) });
+              new Notification(event.message.author, {
+                body: (event.message.voice ? 'Sent you a voice message' : event.message.text).slice(0, 120),
+              });
             } catch {
               /* notifications can be blocked by the OS */
             }
@@ -231,7 +234,7 @@ export function useMessenger() {
         peerId: peer?.peerId ?? '',
         startedAt: startedAtRef.current || Date.now(),
         endedAt: Date.now(),
-        messages: messages.slice(-200),
+        messages: messages.slice(-200).map(stripVoiceTransport),
       };
       setHistory(sessionStore.upsert(record));
     }
@@ -258,6 +261,23 @@ export function useMessenger() {
     setMessages((current) => [...current, message]);
     return true;
   }, []);
+
+  const sendVoice = useCallback(
+    async (audio: Blob, mimeType: string, durationMs: number) => {
+      const link = linkRef.current;
+      const active = sessionRef.current;
+      if (!link || !active) return false;
+      const message = await link.sendVoice(audio, mimeType, durationMs, active.displayName);
+      if (!message) {
+        setError('The direct link is not ready, so the voice note was not sent.');
+        return false;
+      }
+      setError(null);
+      setMessages((current) => [...current, message]);
+      return true;
+    },
+    [],
+  );
 
   const retryLink = useCallback(() => {
     setError(null);
@@ -315,6 +335,7 @@ export function useMessenger() {
     joinRoom,
     leaveRoom,
     sendMessage,
+    sendVoice,
     retryLink,
     updatePrefs,
     requestNotifications,
